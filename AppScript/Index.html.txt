@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&display=swap" rel="stylesheet">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #0a192f 0%, #4a0e17 100%);
+      --text-color: #fff;
+      --accent: #38bdf8;
+      --glass-bg: rgba(255, 255, 255, 0.08); 
+      --glass-border: rgba(255, 255, 255, 0.15);
+      --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4); 
+      --success-color: #0f9d58;
+    }
+
+    body {
+      font-family: 'Montserrat', sans-serif;
+      margin: 0; padding: 0;
+      background: var(--bg-gradient);
+      background-attachment: fixed;
+      min-height: 100vh;
+      color: var(--text-color);
+      padding-bottom: 90px;
+    }
+
+    /* Top Header */
+    .header-bar {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(10, 25, 47, 0.85); backdrop-filter: blur(12px);
+      padding: 15px 20px; text-align: center;
+      border-bottom: 1px solid var(--glass-border);
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .header-text { text-align: left; }
+    .header-title { font-size: 18px; font-weight: 700; margin: 0 0 5px 0; }
+    .live-clock { font-size: 13px; color: var(--accent); font-weight: 600; }
+    
+    .btn-guest {
+      background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border);
+      color: white; padding: 8px 12px; border-radius: 8px; font-size: 13px;
+      font-weight: 600; cursor: pointer; transition: background 0.2s;
+    }
+    .btn-guest:active { background: rgba(255,255,255,0.2); }
+
+    /* Controls: Search & Select All */
+    .controls-container {
+      padding: 15px; max-width: 800px; margin: 0 auto;
+      display: flex; gap: 10px; align-items: center;
+    }
+    .search-box {
+      flex-grow: 1; padding: 12px 15px;
+      background: var(--glass-bg); border: 1px solid var(--glass-border);
+      border-radius: 12px; font-size: 15px; color: #fff; outline: none;
+      font-family: inherit; box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .search-box::placeholder { color: #cbd5e1; }
+    
+    .btn-select-all {
+      padding: 12px 15px; background: rgba(255,255,255,0.1);
+      border: 1px solid var(--glass-border); border-radius: 12px;
+      color: #fff; font-weight: 600; cursor: pointer; white-space: nowrap;
+      transition: background 0.2s; font-family: inherit;
+    }
+    .btn-select-all:active { background: rgba(255,255,255,0.2); }
+
+    /* Student List */
+    .list-container { max-width: 800px; margin: 0 auto; padding: 0 15px; }
+    
+    .student-row {
+      display: flex; align-items: center; justify-content: space-between;
+      background: var(--glass-bg); border: 1px solid var(--glass-border);
+      padding: 15px; margin-bottom: 10px; border-radius: 12px;
+      cursor: pointer; transition: transform 0.1s, background 0.2s, border-color 0.2s;
+    }
+    .student-row:active { transform: scale(0.98); }
+    .student-row.selected { background: rgba(56, 189, 248, 0.15); border-color: var(--accent); }
+    
+    .student-info { display: flex; flex-direction: column; }
+    .student-name { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    .student-reg { font-size: 11px; color: #cbd5e1; }
+
+    /* Custom Checkbox */
+    .custom-checkbox {
+      width: 26px; height: 26px; border-radius: 6px;
+      border: 2px solid var(--glass-border);
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s;
+    }
+    .student-row.selected .custom-checkbox { background: var(--accent); border-color: var(--accent); }
+    .check-icon { display: none; fill: #0a192f; width: 16px; height: 16px; }
+    .student-row.selected .check-icon { display: block; }
+
+    /* Bottom Upload Bar */
+    .upload-bar {
+      position: fixed; bottom: 0; left: 0; width: 100%;
+      background: rgba(10, 25, 47, 0.95); backdrop-filter: blur(12px);
+      padding: 15px; box-sizing: border-box;
+      border-top: 1px solid var(--glass-border);
+      display: flex; justify-content: center; z-index: 99;
+    }
+    .btn-upload {
+      width: 100%; max-width: 800px; padding: 16px;
+      background: var(--success-color); color: white;
+      border: none; border-radius: 12px; font-size: 16px; font-weight: 700;
+      box-shadow: 0 4px 15px rgba(15, 157, 88, 0.4); cursor: pointer;
+      font-family: inherit; transition: opacity 0.2s;
+    }
+    .btn-upload:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Modals */
+    .modal-overlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.7); backdrop-filter: blur(5px);
+      display: none; align-items: center; justify-content: center; z-index: 200;
+    }
+    .modal-content {
+      background: rgba(15, 23, 42, 0.95); border: 1px solid var(--glass-border);
+      padding: 24px; border-radius: 16px; width: 90%; max-width: 320px;
+      text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+    }
+    .modal-content h3 { margin: 0 0 15px 0; font-size: 18px; }
+    .modal-text { color: #cbd5e1; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
+    .modal-input {
+      width: 100%; padding: 12px; box-sizing: border-box; margin-bottom: 20px;
+      background: rgba(255,255,255,0.1); border: 1px solid var(--glass-border);
+      color: white; border-radius: 8px; font-family: inherit; outline: none;
+    }
+    .modal-btn-group { display: flex; gap: 10px; }
+    .modal-btn {
+      flex: 1; padding: 12px; border: none; border-radius: 8px;
+      font-weight: bold; cursor: pointer; font-family: inherit; color: white;
+    }
+    .btn-cancel { background: transparent; border: 1px solid rgba(255,255,255,0.3); color: #cbd5e1; }
+    .btn-submit { background: var(--accent); color: #0a192f; }
+    .btn-confirm-sync { background: var(--success-color); color: white; }
+
+    /* Utilities */
+    .spinner {
+      display: none; width: 40px; height: 40px; margin: 40px auto;
+      border: 4px solid rgba(255,255,255,0.1); border-top: 4px solid var(--accent);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    
+    .toast {
+      position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
+      background: #1e293b; color: #fff; padding: 12px 24px;
+      border-radius: 30px; font-size: 14px; font-weight: 600; text-align: center;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6); border: 1px solid var(--glass-border);
+      z-index: 1000; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <div class="header-bar">
+    <div class="header-text">
+      <h2 class="header-title">Attendance Portal</h2>
+      <div id="live-clock" class="live-clock">Loading Time...</div>
+    </div>
+    <button class="btn-guest" onclick="openGuestModal()">+ Guest</button>
+  </div>
+
+  <div class="controls-container">
+    <input type="text" id="searchInput" class="search-box" placeholder="Search student..." onkeyup="filterStudents()">
+    <button id="selectAllBtn" class="btn-select-all" onclick="toggleSelectAll()">Select All</button>
+  </div>
+
+  <div id="loader" class="spinner"></div>
+
+  <div id="student-list" class="list-container"></div>
+
+  <div class="upload-bar">
+    <button id="uploadBtn" class="btn-upload" onclick="openSyncModal()" disabled>
+      Sync Database (0)
+    </button>
+  </div>
+
+  <div id="syncModal" class="modal-overlay">
+    <div class="modal-content">
+      <h3>Confirm Sync</h3>
+      <p id="syncModalText" class="modal-text"></p>
+      <div class="modal-btn-group">
+        <button class="modal-btn btn-cancel" onclick="closeSyncModal()">Cancel</button>
+        <button class="modal-btn btn-confirm-sync" onclick="executeUpload()">Sync Now</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="guestModal" class="modal-overlay">
+    <div class="modal-content">
+      <h3>Add Guest Student</h3>
+      <input type="text" id="guestNameInput" class="modal-input" placeholder="Enter guest name...">
+      <div class="modal-btn-group">
+        <button class="modal-btn btn-cancel" onclick="closeGuestModal()">Cancel</button>
+        <button class="modal-btn btn-submit" id="guestSubmitBtn" onclick="submitGuest()">Add Guest</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <svg style="display: none;">
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></symbol>
+  </svg>
+
+  <script>
+    let masterStudentList = [];
+    let selectedStudents = new Set();
+    let isAllSelected = false;
+
+    // --- Clock Logic ---
+    setInterval(() => {
+      const now = new Date();
+      const options = { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' };
+      document.getElementById('live-clock').innerText = now.toLocaleString('en-IN', options);
+    }, 1000);
+
+    // --- Boot Load ---
+    window.onload = function() {
+      document.getElementById('loader').style.display = 'block';
+      google.script.run.withSuccessHandler(renderStudents).getWebAppStudents();
+    };
+
+    function renderStudents(students) {
+      masterStudentList = students;
+      selectedStudents.clear();
+
+      document.getElementById('loader').style.display = 'none';
+      const container = document.getElementById('student-list');
+      container.innerHTML = '';
+
+      students.forEach((student, index) => {
+        const row = document.createElement('div');
+        row.className = 'student-row';
+        row.id = `row-${index}`;
+        row.dataset.name = student.name.toLowerCase();
+        
+        if (student.isPresent) {
+          row.classList.add('selected');
+          selectedStudents.add(index);
+        }
+
+        row.innerHTML = `
+          <div class="student-info">
+            <span class="student-name">${student.name}</span>
+            <span class="student-reg">ID: ${student.regNo || student.uid}</span>
+          </div>
+          <div class="custom-checkbox">
+            <svg class="check-icon"><use href="#icon-check"></use></svg>
+          </div>
+        `;
+
+        row.onclick = () => toggleStudent(index);
+        container.appendChild(row);
+      });
+
+      updateUploadButton();
+    }
+
+    // --- Batch Selection Logic ---
+    function toggleStudent(index) {
+      const row = document.getElementById(`row-${index}`);
+      if (selectedStudents.has(index)) {
+        selectedStudents.delete(index);
+        row.classList.remove('selected');
+      } else {
+        selectedStudents.add(index);
+        row.classList.add('selected');
+      }
+      updateUploadButton();
+    }
+
+    function toggleSelectAll() {
+      const visibleRows = document.querySelectorAll('.student-row:not(.hidden)');
+      isAllSelected = !isAllSelected;
+      
+      visibleRows.forEach(row => {
+        const index = parseInt(row.id.split('-')[1]);
+        if (isAllSelected) {
+          selectedStudents.add(index);
+          row.classList.add('selected');
+        } else {
+          selectedStudents.delete(index);
+          row.classList.remove('selected');
+        }
+      });
+      
+      document.getElementById('selectAllBtn').innerText = isAllSelected ? "Clear All" : "Select All";
+      updateUploadButton();
+    }
+
+    function updateUploadButton() {
+      const btn = document.getElementById('uploadBtn');
+      const count = selectedStudents.size;
+      btn.innerText = `Sync Database (${count})`;
+      btn.disabled = false;
+    }
+
+    // --- Search Logic (Starts-With Matching) ---
+    function filterStudents() {
+      const query = document.getElementById('searchInput').value.toLowerCase().trim();
+      const rows = document.querySelectorAll('.student-row');
+      
+      rows.forEach(row => {
+        if (!query) {
+          row.classList.remove('hidden');
+          return;
+        }
+
+        const fullName = row.dataset.name;
+        const nameParts = fullName.split(' ');
+        
+        const matchFound = fullName.startsWith(query) || nameParts.some(part => part.startsWith(query));
+
+        if (matchFound) {
+          row.classList.remove('hidden');
+        } else {
+          row.classList.add('hidden');
+        }
+      });
+    }
+
+    // --- NEW Custom Sync Confirmation Logic ---
+    function openSyncModal() {
+      const textElement = document.getElementById('syncModalText');
+      textElement.innerText = `You are about to sync the database. This will update today's sheet to match the ${selectedStudents.size} ticked students.`;
+      document.getElementById('syncModal').style.display = 'flex';
+    }
+
+    function closeSyncModal() {
+      document.getElementById('syncModal').style.display = 'none';
+    }
+
+    function executeUpload() {
+      closeSyncModal(); // Hide the modal immediately
+
+      const payload = Array.from(selectedStudents).map(index => masterStudentList[index]);
+      const btn = document.getElementById('uploadBtn');
+      btn.innerText = "Syncing...";
+      btn.disabled = true;
+
+      google.script.run
+        .withSuccessHandler((response) => {
+          showToast(response.message);
+          btn.innerText = `Sync Database (${selectedStudents.size})`;
+          btn.disabled = false;
+        })
+        .withFailureHandler((err) => {
+          showToast("Error: " + err.message);
+          btn.innerText = `Sync Database (${selectedStudents.size})`;
+          btn.disabled = false;
+        })
+        .submitWebAppAttendance(payload);
+    }
+
+    // --- Guest Logic ---
+    function openGuestModal() {
+      document.getElementById('guestModal').style.display = 'flex';
+      document.getElementById('guestNameInput').focus();
+    }
+
+    function closeGuestModal() {
+      document.getElementById('guestModal').style.display = 'none';
+      document.getElementById('guestNameInput').value = '';
+    }
+
+    function submitGuest() {
+      const nameInput = document.getElementById('guestNameInput').value.trim();
+      if (!nameInput) {
+        showToast("Please enter a name first.");
+        return;
+      }
+
+      const btn = document.getElementById('guestSubmitBtn');
+      btn.innerText = "Adding...";
+      btn.disabled = true;
+
+      google.script.run
+        .withSuccessHandler((response) => {
+          showToast(response.message);
+          btn.innerText = "Add Guest";
+          btn.disabled = false;
+          closeGuestModal();
+        })
+        .withFailureHandler((err) => {
+          showToast("Error: " + err.message);
+          btn.innerText = "Add Guest";
+          btn.disabled = false;
+        })
+        .submitGuestAttendance(nameInput);
+    }
+
+    // --- Utilities ---
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 4000);
+    }
+  </script>
+</body>
+</html>

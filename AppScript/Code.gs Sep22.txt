@@ -1,0 +1,444 @@
+// =========================================================================
+// 1. BATCH UPLOAD HANDLER (THE FAST, 1000% SAFE RECEIVER)
+// =========================================================================
+function doPost(e) {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) {
+    return ContentService.createTextOutput("Busy");
+  }
+
+  try {
+    var action = e.parameter.action;
+    
+    if (action === "batch") {
+      var payload = e.postData.contents;
+      if (!payload) return ContentService.createTextOutput("ERROR:NoData");
+
+      var lines = payload.split('\n');
+      var ss = SpreadsheetApp.openById("1INXA0x362si4FJK1jQ22rPVcjAvzySiMV3fnRSiNEdM");
+      var studentSheet = ss.getSheetByName("Students");
+      var attendanceSheet = ss.getSheetByName("Attendance");
+      var newUidSheet = ss.getSheetByName("New UID");
+
+      // 1. Pre-load students for fast lookup
+      var studentsData = studentSheet.getDataRange().getValues();
+      var studentMap = {};
+      for (var i = 1; i < studentsData.length; i++) {
+        var uid = studentsData[i][0].toString().trim();
+        if (uid) {
+          studentMap[uid] = { name: studentsData[i][1], reg: studentsData[i][2] };
+        }
+      }
+
+      // 2. Pre-load recent attendance for duplicate check
+      var lastAttRow = attendanceSheet.getLastRow();
+      var recentAtt = new Set();
+      var timeZone = Session.getScriptTimeZone();
+
+      if (lastAttRow > 1) {
+        var searchDepth = Math.min(lastAttRow - 1, 1000);
+        var startRow = lastAttRow - searchDepth + 1;
+        var recentData = attendanceSheet.getRange(startRow, 3, searchDepth, 2).getValues();
+        for (var j = 0; j < recentData.length; j++) {
+          var rowUID = recentData[j][0].toString().trim();
+          var rowDateRaw = recentData[j][1];
+          var rowDateStr = "";
+          
+          if (rowDateRaw instanceof Date) {
+             rowDateStr = Utilities.formatDate(rowDateRaw, timeZone, "dd-MM-yyyy");
+          } else if (rowDateRaw) {
+             rowDateStr = rowDateRaw.toString().trim();
+             if(rowDateStr.indexOf(' ') > 0) rowDateStr = rowDateStr.split(' ')[0];
+          }
+          recentAtt.add(rowUID + "|" + rowDateStr);
+        }
+      }
+
+      // 3. Pre-load existing "New UIDs" to prevent spamming multiple entries of the same unknown card
+      var knownNewUids = new Set();
+      var lastNewRow = newUidSheet.getLastRow();
+      if (lastNewRow > 1) {
+        var existingNewUidsData = newUidSheet.getRange(2, 1, lastNewRow - 1, 1).getValues();
+        for (var n = 0; n < existingNewUidsData.length; n++) {
+          knownNewUids.add(existingNewUidsData[n][0].toString().trim());
+        }
+      }
+
+      var validCount = 0;
+      var rowsToAppend = [];
+      var newUidsToAppend = [];
+
+      // 4. Process the Batch Box
+      for (var k = 0; k < lines.length; k++) {
+        var line = lines[k].trim();
+        if (!line) continue;
+
+        validCount++; 
+
+        var firstComma = line.indexOf(',');
+        var secondComma = line.indexOf(',', firstComma + 1);
+        
+        var card = line.substring(0, firstComma).trim();
+        var todayStr = line.substring(firstComma + 1, secondComma).trim();
+        var timeStr = line.substring(secondComma + 1).trim();
+
+        var sData = studentMap[card];
+        if (sData) {
+           var attKey = card + "|" + todayStr;
+           if (!recentAtt.has(attKey)) {
+               rowsToAppend.push([sData.name, sData.reg, card, todayStr, timeStr]);
+               recentAtt.add(attKey); // Add to memory so we don't duplicate within the same batch
+           }
+        } else {
+           // Block rapid-fire duplicates of the same unregistered card within the same batch
+           if (!knownNewUids.has(card)) {
+               newUidsToAppend.push([card, todayStr, timeStr]);
+               knownNewUids.add(card); 
+           }
+        }
+      }
+
+      // 5. Save everything instantly
+      if (rowsToAppend.length > 0) {
+        attendanceSheet.getRange(lastAttRow + 1, 1, rowsToAppend.length, 5).setValues(rowsToAppend);
+      }
+      if (newUidsToAppend.length > 0) {
+        newUidSheet.getRange(lastNewRow + 1, 1, newUidsToAppend.length, 3).setValues(newUidsToAppend);
+      }
+
+      // 6. Send exact matching receipt back to ESP32
+      return ContentService.createTextOutput("SUCCESS:" + validCount);
+    }
+  } catch(err) {
+    return ContentService.createTextOutput("ERROR:" + err.toString());
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// =========================================================================
+// 2. MAIN ENTRY POINT (TRAFFIC COP)
+// =========================================================================
+function doGet(e) {
+  // If no parameters are passed, serve the Mobile Web App
+  if (!e || !e.parameter || Object.keys(e.parameter).length === 0) {
+    return HtmlService.createHtmlOutputFromFile('Index')
+      .setTitle('TSKF Emergency Attendance')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  }
+
+  // =========================================================================
+  // 3. HARDWARE LOCK SERVICE
+  // =========================================================================
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    return ContentService.createTextOutput("Busy");
+  }
+
+  try {
+    var ss = SpreadsheetApp.openById("1INXA0x362si4FJK1jQ22rPVcjAvzySiMV3fnRSiNEdM");
+    var studentSheet = ss.getSheetByName("Students");
+
+    if (e.parameter.action === "sync") {
+      var data = studentSheet.getRange(2, 1, studentSheet.getLastRow() - 1, 2).getValues();
+      var csvOutput = data
+        .filter(function(row) { return row[0].toString().trim() !== ""; })
+        .map(function(row) { return row[0].toString().trim() + "," + row[1].toString().trim(); })
+        .join("\n");
+      
+      if (csvOutput.length > 0) csvOutput += "\n"; 
+      return ContentService.createTextOutput(csvOutput);
+    }
+
+    var card = (e.parameter.card || "").toString().trim();
+    var tsParam = e.parameter.ts;
+    var now;
+
+    if (tsParam && tsParam.indexOf(',') > -1) {
+      var parts = tsParam.split(',');     
+      var dateParts = parts[0].split('-'); 
+      var timeParts = parts[1].split(':'); 
+      now = new Date(
+        parseInt(dateParts[2]), parseInt(dateParts[1]) - 1, parseInt(dateParts[0]),       
+        parseInt(timeParts[0]), parseInt(timeParts[1]), parseInt(timeParts[2])        
+      );
+    } else {
+      now = new Date();
+    }
+
+    if (!card) return ContentService.createTextOutput("NoCard");
+
+    var attendanceSheet = ss.getSheetByName("Attendance");
+    var newUidSheet = ss.getSheetByName("New UID");
+
+    var timeZone = Session.getScriptTimeZone();
+    var todayStr = Utilities.formatDate(now, timeZone, "dd-MM-yyyy");
+    var timeStr = Utilities.formatDate(now, timeZone, "hh:mm:ss a");
+
+    var students = studentSheet.getDataRange().getValues();
+    var fullName = "";
+    var regNo = "";
+    var studentFound = false;
+
+    for (var i = 1; i < students.length; i++) {
+      if (students[i][0].toString().trim() === card) {
+        fullName = students[i][1]; regNo = students[i][2]; studentFound = true; break;
+      }
+    }
+
+    if (!studentFound) {
+      var lastRow = newUidSheet.getLastRow();
+      var isRecorded = false;
+      if (lastRow > 0) {
+        var existingNewUIDs = newUidSheet.getRange(1, 1, lastRow, 1).getValues();
+        for (var n = 0; n < existingNewUIDs.length; n++) {
+          if (existingNewUIDs[n][0].toString().trim() === card) { isRecorded = true; break; }
+        }
+      }
+      if (!isRecorded) {
+        newUidSheet.getRange(lastRow + 1, 1, 1, 3).setValues([[card, todayStr, timeStr]]);
+      }
+      return ContentService.createTextOutput("NewUID");
+    }
+
+    var lastAttRow = attendanceSheet.getLastRow();
+    if (lastAttRow > 1) {
+      var searchDepth = Math.min(lastAttRow - 1, 500); 
+      var startRow = lastAttRow - searchDepth + 1;
+      var recentData = attendanceSheet.getRange(startRow, 3, searchDepth, 2).getValues();
+      for (var j = recentData.length - 1; j >= 0; j--) {
+        var rowUID = recentData[j][0].toString().trim(); 
+        var rowDateRaw = recentData[j][1];              
+        if (rowUID === card) {
+          var rowDateStr = Utilities.formatDate(new Date(rowDateRaw), timeZone, "dd-MM-yyyy");
+          if (rowDateStr === todayStr) return ContentService.createTextOutput("AlreadyMarked");
+        }
+      }
+    }
+
+    attendanceSheet.getRange(lastAttRow + 1, 1, 1, 5).setValues([[fullName, regNo, card, todayStr, timeStr]]);
+    return ContentService.createTextOutput("OK");
+
+  } catch (err) {
+    return ContentService.createTextOutput("Error: " + err.toString());
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ==========================================
+// EXISTING MACROS (UNTOUCHED)
+// ==========================================
+function markManualAttendance() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const studentSheet = ss.getSheetByName("Students");
+  const attendanceSheet = ss.getSheetByName("Attendance");
+  
+  const data = studentSheet.getDataRange().getValues();
+  const now = new Date();
+  const dateFormatted = Utilities.formatDate(now, Session.getScriptTimeZone(), "dd-MM-yyyy");
+  const timeFormatted = Utilities.formatDate(now, Session.getScriptTimeZone(), "HH:mm:ss");
+
+  const attendanceData = attendanceSheet.getDataRange().getDisplayValues();
+  const existingRecords = new Set(attendanceData.map(row => row[0] + "|" + row[3])); 
+
+  let rowsToAdd = [];
+  let processedNames = [];
+  let rangesToUncheck = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const isChecked = data[i][3]; 
+    if (isChecked === true) {
+      const uid   = data[i][0];
+      const name  = data[i][1];
+      const regNo = data[i][2];
+
+      if (!existingRecords.has(name + "|" + dateFormatted)) {
+        rowsToAdd.push([name, regNo, uid, dateFormatted, timeFormatted]);
+        processedNames.push(name);
+        existingRecords.add(name + "|" + dateFormatted); 
+      }
+      rangesToUncheck.push(i + 1);
+    }
+  }
+
+  if (rowsToAdd.length > 0) {
+    attendanceSheet.getRange(attendanceSheet.getLastRow() + 1, 1, rowsToAdd.length, rowsToAdd[0].length).setValues(rowsToAdd);
+  }
+
+  rangesToUncheck.forEach(row => studentSheet.getRange(row, 4).setValue(false));
+
+  if (processedNames.length > 0) {
+    SpreadsheetApp.getUi().alert('Manual attendance recorded for:\n' + processedNames.join('\n'));
+  } else if (rangesToUncheck.length > 0) {
+    SpreadsheetApp.getUi().alert('Selections ignored: Attendance was already recorded today for these students.');
+  } else {
+    SpreadsheetApp.getUi().alert('Please check at least one box in the "Mark Attendance" column.');
+  }
+}
+
+function markBackdatedF1() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const studentSheet = ss.getSheetByName("Students");
+  const attendanceSheet = ss.getSheetByName("Attendance");
+  
+  const selectedDate = studentSheet.getRange("F1").getValue();
+  
+  if (!(selectedDate instanceof Date)) {
+    SpreadsheetApp.getUi().alert('Please select a valid date in cell F1 first.');
+    return;
+  }
+
+  const formattedDate = Utilities.formatDate(selectedDate, Session.getScriptTimeZone(), "dd-MM-yyyy");
+  const data = studentSheet.getDataRange().getValues();
+
+  const attendanceData = attendanceSheet.getDataRange().getDisplayValues();
+  const existingRecords = new Set(attendanceData.map(row => row[0] + "|" + row[3])); 
+
+  let rowsToAdd = [];
+  let processedNames = [];
+  let rangesToUncheck = [];
+
+  for (let i = 1; i < data.length; i++) {
+    const isChecked = data[i][4]; 
+    if (isChecked === true) {
+      const uid   = data[i][0];
+      const name  = data[i][1];
+      const regNo = data[i][2];
+
+      if (!existingRecords.has(name + "|" + formattedDate)) {
+        rowsToAdd.push([name, regNo, uid, formattedDate, "19:30:00"]);
+        processedNames.push(name);
+        existingRecords.add(name + "|" + formattedDate);
+      }
+      rangesToUncheck.push(i + 1);
+    }
+  }
+
+  if (rowsToAdd.length > 0) {
+    attendanceSheet.getRange(attendanceSheet.getLastRow() + 1, 1, rowsToAdd.length, rowsToAdd[0].length).setValues(rowsToAdd);
+  }
+
+  rangesToUncheck.forEach(row => studentSheet.getRange(row, 5).setValue(false));
+
+  if (processedNames.length > 0) {
+    SpreadsheetApp.getUi().alert('Backdated attendance recorded for:\n' + processedNames.join('\n'));
+  } else if (rangesToUncheck.length > 0) {
+    SpreadsheetApp.getUi().alert('Selections ignored: Attendance was already recorded on ' + formattedDate + ' for these students.');
+  } else {
+    SpreadsheetApp.getUi().alert('Please check at least one box in the "BackDate Atten" column.');
+  }
+}
+
+// ==========================================
+// WEB APP API FUNCTIONS (TWO-WAY SYNC)
+// ==========================================
+function getWebAppStudents() {
+  const ss = SpreadsheetApp.openById("1INXA0x362si4FJK1jQ22rPVcjAvzySiMV3fnRSiNEdM");
+  const studentSheet = ss.getSheetByName("Students");
+  const attendanceSheet = ss.getSheetByName("Attendance");
+  const timeZone = Session.getScriptTimeZone();
+  const todayStr = Utilities.formatDate(new Date(), timeZone, "dd-MM-yyyy");
+
+  const attData = attendanceSheet.getDataRange().getValues(); 
+  const presentNames = new Set();
+  
+  for (let i = 1; i < attData.length; i++) {
+    let rowDateStr = "";
+    if (attData[i][3] instanceof Date) {
+      rowDateStr = Utilities.formatDate(attData[i][3], timeZone, "dd-MM-yyyy");
+    } else if (attData[i][3]) {
+      rowDateStr = attData[i][3].toString().trim();
+    }
+    if (rowDateStr === todayStr) presentNames.add(attData[i][0].toString().trim()); 
+  }
+
+  const data = studentSheet.getDataRange().getValues();
+  let students = [];
+  
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][1]) { 
+      const sName = data[i][1].toString().trim(); 
+      students.push({
+        uid: data[i][0].toString().trim(),
+        name: sName,
+        regNo: data[i][2].toString().trim(),
+        isPresent: presentNames.has(sName) 
+      });
+    }
+  }
+  return students;
+}
+
+function submitWebAppAttendance(selectedStudents) {
+  const ss = SpreadsheetApp.openById("1INXA0x362si4FJK1jQ22rPVcjAvzySiMV3fnRSiNEdM");
+  const attendanceSheet = ss.getSheetByName("Attendance");
+  const timeZone = Session.getScriptTimeZone();
+  const now = new Date();
+  
+  const todayStr = Utilities.formatDate(now, timeZone, "dd-MM-yyyy");
+  const timeStr = Utilities.formatDate(now, timeZone, "HH:mm:ss");
+
+  const attData = attendanceSheet.getDataRange().getValues();
+  const todayRecords = new Map(); 
+  for(let i = 1; i < attData.length; i++) {
+    let rowDateStr = "";
+    if (attData[i][3] instanceof Date) {
+      rowDateStr = Utilities.formatDate(attData[i][3], timeZone, "dd-MM-yyyy");
+    } else if (attData[i][3]) {
+      rowDateStr = attData[i][3].toString().trim();
+    }
+    if (rowDateStr === todayStr) todayRecords.set(attData[i][0].toString().trim(), i + 1); 
+  }
+
+  const submittedNames = new Set(selectedStudents.map(s => s.name.trim()));
+
+  let rowsToAdd = [];
+  let rowsToDelete = [];
+  let addedCount = 0;
+  let removedCount = 0;
+
+  for (let i = 0; i < selectedStudents.length; i++) {
+    const student = selectedStudents[i];
+    if (!todayRecords.has(student.name.trim())) {
+      rowsToAdd.push([student.name, student.regNo, student.uid, todayStr, timeStr]);
+      addedCount++;
+    }
+  }
+
+  todayRecords.forEach((rowIndex, studentName) => {
+    if (!submittedNames.has(studentName)) {
+      if (!studentName.includes("(Guest)")) {
+        rowsToDelete.push(rowIndex);
+        removedCount++;
+      }
+    }
+  });
+
+  rowsToDelete.sort((a, b) => b - a);
+  for (let r = 0; r < rowsToDelete.length; r++) attendanceSheet.deleteRow(rowsToDelete[r]);
+
+  if (rowsToAdd.length > 0) {
+    attendanceSheet.getRange(attendanceSheet.getLastRow() + 1, 1, rowsToAdd.length, rowsToAdd[0].length).setValues(rowsToAdd);
+  }
+  
+  let msg = "Attendance Synced!";
+  if (addedCount > 0 || removedCount > 0) msg = `Synced! Added ${addedCount}, Removed ${removedCount}.`;
+  else msg = "No changes were made.";
+  return { success: true, message: msg };
+}
+
+function submitGuestAttendance(guestName) {
+  const ss = SpreadsheetApp.openById("1INXA0x362si4FJK1jQ22rPVcjAvzySiMV3fnRSiNEdM");
+  const attendanceSheet = ss.getSheetByName("Attendance");
+  const timeZone = Session.getScriptTimeZone();
+  const now = new Date();
+  
+  const todayStr = Utilities.formatDate(now, timeZone, "dd-MM-yyyy");
+  const timeStr = Utilities.formatDate(now, timeZone, "HH:mm:ss");
+
+  const formattedName = guestName + " (Guest)";
+  attendanceSheet.appendRow([formattedName, "GUEST", "MANUAL-ENTRY", todayStr, timeStr]);
+  return { success: true, message: `${formattedName} added.` };
+}
